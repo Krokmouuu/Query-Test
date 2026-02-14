@@ -1,0 +1,63 @@
+--- 9 questions (French, Complex) ---
+
+1 - Pour chaque établissement, donne-moi le nombre de médecins, le nombre de patients et le nombre total de visites, trié par nombre de visites décroissant.
+
+2 - Quels patients ont eu plus de 5 visites et ont une assurance dont la date d’expiration est après le 1er janvier 2025 ?
+
+3 - Liste tous les diagnostics posés par des médecins dont la spécialité contient "Cardio", avec le nom du médecin et la date de la visite.
+
+4 - Combien de visites par mois pour l’établissement "North Clinic" ? (avec le mois et l’année)
+
+5 - Pour chaque établissement, donne le patient qui a eu le plus de visites avec un médecin de cet établissement (et uniquement ces visites), avec le nom de l’établissement, le nom du patient et le nombre de visites. Trie par nombre de visites décroissant.
+
+6 - Pour chaque patient, quel est le médecin qui l’a vu le plus souvent ? Donne le nom du patient, le nom du médecin et le nombre de visites.
+
+7 - Quelles sont les 5 raisons de venue les plus fréquentes, avec le nombre de visites pour chaque raison ?
+
+8 - Les 3 médecins qui ont fait le plus de visites, avec le nom de leur établissement et leur spécialité.
+
+9 - Tous les diagnostics distincts pour les patients nés avant 1990, avec le nom du patient et la dernière date de la visite.
+
+--- 10 questions (English, simple) ---
+
+How many doctors do we have?
+
+Show me the list of patients.
+
+Which patients have insurance that runs out after 2025?
+
+How many visits did we have last month?
+
+Who are the doctors at North Clinic?
+
+Give me the number of visits for each facility.
+
+Which doctor had the most visits?
+
+List the visits for this month.
+
+How many patients are there per facility?
+
+What are the main reasons for visits?
+
+--- Same 10 questions WITH typos/errors ---
+
+1. Hos many docters do we have?
+
+2. Show me thelist of patiens.
+
+3. Wich patients hae insurrance tat run outater 2025?
+
+4. How many visist did we had last month?
+
+5. Wo are the doctor at North Clinik?
+
+6. Give me the number of visit for each facilty.
+
+7. Wich doctor had the most visit?
+
+8. List the visit for this month.
+
+9. How many patiens are they per facility?
+
+10. What are the main reason for visit?

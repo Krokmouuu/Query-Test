@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --surface: 220 18% 10%;
+  --surface-muted: 220 14% 14%;
+  --accent: 262 83% 58%;
+  --border: 220 14% 22%;
+  --foreground: 210 20% 98%;
+  --muted: 220 10% 55%;
+}
+
+body {
+  @apply bg-[hsl(var(--surface))] text-[hsl(var(--foreground))] antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-[hsl(var(--surface-muted))];
+}
+::-webkit-scrollbar-thumb {
+  @apply rounded-full bg-[hsl(var(--border))];
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-[hsl(220,14%,35%)];
+}
