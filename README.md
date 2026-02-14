@@ -153,6 +153,36 @@ Ouvrir **http://localhost:3000** dans le navigateur : zone de question, choix du
 
 ---
 
+## Règles et comportement
+
+### Règles envoyées au LLM (schema context)
+
+Le prompt système contient :
+
+- **Schéma PostgreSQL** : tables (organizations, facilities, doctors, patients, insurances, visits), colonnes et relations (clés étrangères).
+- **Vocabulaire** : mapping des notions du domaine vers le schéma (établissement / facility / hospital → `facilities`, médecin → `doctors`, visite → `visits`, assurance → `insurances`, diagnostic / raison → `visits.diagnosis` / `visits.reason`). Le LLM doit utiliser les bonnes tables pour les concepts demandés.
+- **Règles critiques** : alias obligatoires (o, f, d, p, i, v), pas de `d.name`/`p.name` (utiliser `first_name || ' ' || last_name`), agrégats dans HAVING pas dans WHERE, « un row par X avec le Y qui a le plus de Z » → CTE + `ROW_NUMBER()`, listes (diagnostics, raisons) → inclure la colonne concernée dans le SELECT, etc.
+
+### Corrections automatiques (post-traitement)
+
+Après génération du SQL, une série de **correctifs** est appliquée (ordre fixe) : troncature au premier `;`, suppression des backticks, correction de virgules en trop, déplacement d’agrégats du WHERE vers le HAVING, ajout de GROUP BY pour EXTRACT(visit_date), correction d’ordres de JOIN (facilities/doctors/visits), et **réécriture** du pattern « GROUP BY établissement + patient + ORDER BY num_visits » en requête « un patient par établissement » (CTE + `ROW_NUMBER()`).
+
+### Timeout (proxy)
+
+Les appels du frontend vers l’API passent par une **route proxy** Next.js (`/api/proxy/*`) qui relaie vers l’API Nest (port 4000). Un **timeout de 2 minutes** (120 s) est appliqué à chaque requête proxy. Au-delà, le client reçoit une erreur **504** (timeout) au lieu d’un « socket hang up ». Cela évite les coupures de connexion lors d’appels LLM longs.
+
+### Retry en cas d’erreur d’exécution SQL
+
+Si l’exécution PostgreSQL échoue avec une erreur reconnue (ex. `missing FROM-clause entry`, `must appear in the GROUP BY`, `aggregate function`, `syntax error`, etc.), le service :
+
+1. **Relance jusqu’à 3 fois** : à chaque tentative, une **nouvelle** génération SQL est demandée au LLM.
+2. **Envoie l’erreur au LLM** : le message d’erreur PostgreSQL est ajouté au prompt (« This error occurred when executing the previous generated query… »), avec une extraction des **noms de colonnes / identifiants** mentionnés dans l’erreur, pour guider la correction.
+3. **Log** : un message du type `Error LLM (execution): … Retry 1/3 (max 3)` est écrit dans les logs de l’API.
+
+Les erreurs non reconnues (réseau, quota, etc.) ne déclenchent pas de retry et sont renvoyées telles quelles au client (en **400** via le filtre d’exception, pas en 500).
+
+---
+
 ## Stack technique
 
 - **Monorepo** : pnpm
