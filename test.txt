@@ -14,50 +14,50 @@
 
 7 - Quelles sont les 5 raisons de venue les plus fréquentes, avec le nombre de visites pour chaque raison ?
 
-8 - Les 3 médecins qui ont fait le plus de visites, avec le nom de leur établissement et leur spécialité.
+8 - Le nom des 3 médecins qui ont fait le plus de visites, avec le nom de leur établissement et leur spécialité.
 
 9 - Tous les diagnostics distincts pour les patients nés avant 1990, avec le nom du patient et la dernière date de la visite.
 
 --- 10 questions (English, simple) ---
 
-How many doctors do we have?
+1 - How many doctors do we have?
 
-Show me the list of patients.
+2 - Show me the list of patients.
 
-Which patients have insurance that runs out after 2025?
+3 - Which patients have insurance that runs out after 2025?
 
-How many visits did we have last month?
+4 - How many visits did we have last month?
 
-Who are the doctors at North Clinic?
+5 - Who are the doctors at North Clinic?
 
-Give me the number of visits for each facility.
+6 - Give me the number of visits for each facility.
 
-Which doctor had the most visits?
+7 - Which doctor had the most visits?
 
-List the visits for this month.
+8 - List the visits for this month.
 
-How many patients are there per facility?
+9 - How many patients are there per facility?
 
-What are the main reasons for visits?
+10 - What are the main reasons for visits?
 
 --- Same 10 questions WITH typos/errors ---
 
-1. Hos many docters do we have?
+1 - Hos many docters do we have?
 
-2. Show me thelist of patiens.
+2 - Show me thelist of patiens.
 
-3. Wich patients hae insurrance tat run outater 2025?
+3 - Wich patients hae insurrance tat run outater 2025?
 
-4. How many visist did we had last month?
+4 - How many visist did we had last month?
 
-5. Wo are the doctor at North Clinik?
+5 - Wo are the doctor at North Clinik?
 
-6. Give me the number of visit for each facilty.
+6 - Give me the number of visit for each facilty.
 
-7. Wich doctor had the most visit?
+7 - Wich doctor had the most visit?
 
-8. List the visit for this month.
+8 - List the visit for this month.
 
-9. How many patiens are they per facility?
+9 - How many patiens are they per facility?
 
-10. What are the main reason for visit?
+10 - What are the main reason for visit?

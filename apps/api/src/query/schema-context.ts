@@ -80,6 +80,9 @@ Table: visits (suggested alias: v)
   doctors (d)       1 ──< visits (v)        via v.doctor_id = d.id
   patients (p)      1 ──< visits (v)        via v.patient_id = p.id
 
+=== VOCABULARY (map question terms to schema) ===
+  Establishment / facility / hospital / clinic / site → table facilities (f), use f.name, f.id. Doctor / physician / specialist → table doctors (d), use d.first_name, d.last_name, d.specialty. Patient → table patients (p). Visit / appointment / consultation → table visits (v), use v.visit_date, v.reason, v.diagnosis. Insurance / coverage / policy / expiration → table insurances (i), use i.expiration_date, i.provider_name. When the question mentions any of these concepts, use the corresponding table and columns; do not omit a table that is required for the requested data.
+
 === CRITICAL RULES (follow strictly) ===
 
 1) Aliases and JOINs
@@ -91,12 +94,15 @@ Table: visits (suggested alias: v)
 
 3) Aggregates and HAVING
    Never put COUNT/SUM/AVG/MIN/MAX in WHERE. Conditions on aggregates go in HAVING after GROUP BY.
+   Every alias you use (v, d, p, f, i, o) must be introduced in FROM or JOIN. If you write COUNT(v.id) or v.visit_date in HAVING/WHERE, the query must include JOIN visits v (or the relevant table) somewhere. Pattern: when the question combines a filter on another table (e.g. insurance date, facility name) and a condition on an aggregate (e.g. "more than N visits"), JOIN all required tables, put non-aggregate conditions in WHERE, GROUP BY the entity you are filtering, and put the aggregate condition in HAVING.
 
 4) GROUP BY and SELECT
-   In PostgreSQL, every non-aggregated column in SELECT must appear in GROUP BY. When GROUP BY uses an expression (e.g. EXTRACT(MONTH FROM v.visit_date)), do not put the raw column in SELECT—only that expression or aggregates. For "one row per X with the Y that maximizes Z", use a CTE with ROW_NUMBER() OVER (PARTITION BY X ORDER BY Z DESC) and SELECT WHERE rn = 1.
+   In PostgreSQL, every non-aggregated column in SELECT must appear in GROUP BY. When GROUP BY uses an expression (e.g. EXTRACT(MONTH FROM v.visit_date)), do not put the raw column in SELECT—only that expression or aggregates.
+   "For each X, the Y that has the most Z" (one row per X): you MUST NOT use GROUP BY X, Y with ORDER BY Z. That returns every (X, Y) pair, not one Y per X. You MUST use: (1) CTE that computes the measure per (X, Y) with GROUP BY X, Y; (2) CTE that does ROW_NUMBER() OVER (PARTITION BY X ORDER BY measure DESC) AS rn; (3) SELECT from the second CTE WHERE rn = 1. No other pattern gives one row per X.
 
 5) Listing entities without aggregation
    For "list of doctors", "list of patients", etc., return one row per entity: use SELECT DISTINCT on identifying columns so JOINs do not duplicate rows.
+   When the question asks to list or show a type of data (e.g. diagnoses, reasons, results) together with other attributes (e.g. name, date), include every requested piece in the SELECT. The main subject of the list (e.g. v.diagnosis, v.reason) must appear in the result; do not return only the secondary attributes (name, date) and omit the primary one.
 
 5b) When results involve doctors (counts per doctor, top doctors, rankings by facility or specialty), always include doctor identification in the SELECT list so each row identifies a specific doctor: use d.first_name, d.last_name or d.first_name || ' ' || d.last_name AS doctor_name. Do not return only facility and specialty (or facility and count) without doctor identity when the question is about which doctors or who.
 
@@ -118,6 +124,7 @@ Table: visits (suggested alias: v)
    For "last week": v.visit_date >= CURRENT_DATE - INTERVAL '7 days' AND v.visit_date < CURRENT_DATE + INTERVAL '1 day' (or similar).
    For "this month" or filtering by current month/year: use EXTRACT(MONTH FROM v.visit_date) = EXTRACT(MONTH FROM CURRENT_DATE) AND EXTRACT(YEAR FROM v.visit_date) = EXTRACT(YEAR FROM CURRENT_DATE). Never write "EXTRACT(...) AS month = ..." in WHERE—AS is only for SELECT; in WHERE use "EXTRACT(...) = ...".
    For "by month" or "by year": use EXTRACT(YEAR FROM v.visit_date), EXTRACT(MONTH FROM v.visit_date) or DATE_TRUNC in SELECT and GROUP BY.
+   When the question asks for a "last", "most recent", or "latest" date (or any equivalent wording) for a grouped or listed result, include that date in the SELECT using MAX(date_column) with an appropriate alias. Do not omit any date column that the question explicitly requests in the output.
    Visits have no facility_id. To filter visits by facility: FROM visits v JOIN doctors d ON v.doctor_id = d.id JOIN facilities f ON d.facility_id = f.id WHERE f.name = '...'.
 
 9) Search and filters

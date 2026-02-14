@@ -1,9 +1,8 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  async rewrites() {
-    return [{ source: '/api/proxy/:path*', destination: 'http://localhost:4000/:path*' }];
-  },
+  // Proxy is handled by app/api/proxy/[...path]/route.ts with a 2min timeout
+  // so long LLM calls don't cause "socket hang up" (ECONNRESET).
 };
 
 export default nextConfig;

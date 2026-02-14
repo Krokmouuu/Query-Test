@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  UseFilters,
 } from '@nestjs/common';
 import {
   ExecuteSqlDto,
@@ -12,9 +13,11 @@ import {
   MAX_NL_QUERY_LENGTH,
   MAX_SQL_LENGTH,
 } from './dto/query.dto';
+import { QueryExceptionFilter } from './query-exception.filter';
 import { QueryService } from './query.service';
 
 @Controller('query')
+@UseFilters(QueryExceptionFilter)
 export class QueryController {
   constructor(private readonly queryService: QueryService) {}
 
@@ -81,6 +84,12 @@ export class QueryController {
         `"query" must be at most ${MAX_NL_QUERY_LENGTH} characters.`,
       );
     }
-    return this.queryService.queryFromNaturalLanguage(trimmed);
+    try {
+      return await this.queryService.queryFromNaturalLanguage(trimmed);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'Query failed.';
+      throw new BadRequestException(message);
+    }
   }
 }

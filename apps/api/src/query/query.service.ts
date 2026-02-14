@@ -1,9 +1,11 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import OpenAI from "openai";
 import { db } from "../db";
 import { sql } from "drizzle-orm";
 import { MAX_NL_QUERY_LENGTH, MAX_SQL_LENGTH } from "./dto/query.dto";
 import { SCHEMA_CONTEXT } from "./schema-context";
+
+const MAX_LLM_RETRIES = 5;
 
 const FORBIDDEN_PATTERNS = [
   /\bDROP\b/i,
@@ -23,6 +25,7 @@ const FORBIDDEN_PATTERNS = [
 @Injectable()
 export class QueryService {
   private openai: OpenAI | null = null;
+  private readonly logger = new Logger(QueryService.name);
 
   constructor() {
     const key = process.env.OPENAI_API_KEY;
@@ -35,7 +38,6 @@ export class QueryService {
     }
   }
 
-  /** True if "tableName alias" or "tableName AS alias" appears at paren level 0 in s (not inside a subquery). */
   private hasTableAliasAtTopLevel(
     s: string,
     tableName: string,
@@ -60,7 +62,6 @@ export class QueryService {
     return false;
   }
 
-  /** Keep only the first SQL statement; drop anything after the first semicolon not inside a string. */
   private truncateAtStatementEnd(sql: string): string {
     let inString = false;
     let i = 0;
@@ -80,7 +81,6 @@ export class QueryService {
     return sql.trim();
   }
 
-  /** Returns the main query's FROM clause (FROM ... up to WHERE at paren level 0). */
   private getMainFromClause(sqlQuery: string): string {
     const fromIdx = sqlQuery.search(/\bFROM\b/i);
     if (fromIdx < 0) return "";
@@ -110,7 +110,6 @@ export class QueryService {
     const aggMatch = sqlQuery.match(aggRegex);
     if (!aggMatch) return sqlQuery;
     const aggCond = aggMatch[0];
-    // Ensure alias used in aggregate (e.g. v in COUNT(v.id)) is in the main FROM/JOIN at top level, not in a subquery
     const aliasInAgg = aggCond.match(/\b(\w+)\.\w+/);
     if (aliasInAgg) {
       const alias = aliasInAgg[1];
@@ -134,7 +133,6 @@ export class QueryService {
           );
       if (!hasAliasInFrom) return sqlQuery;
     }
-    // Remove aggregate condition from WHERE (with or without surrounding parens, and AND/alone)
     const escapedAgg = aggCond.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const patterns = [
       new RegExp(`\\s+AND\\s+${escapedAgg}\\s*`, "gi"),
@@ -152,7 +150,6 @@ export class QueryService {
       cleaned = next;
     }
     if (!removedFromWhere) return sqlQuery;
-    // Clean up WHERE: remove outer parens left behind (e.g. "WHERE ( x )" → "WHERE x")
     cleaned = cleaned.replace(/WHERE\s*\(\s*/i, "WHERE ");
     cleaned = cleaned.replace(
       /\s*\)\s*(?=\s*(?:ORDER\s+BY|LIMIT\s+|\s*$))/im,
@@ -170,7 +167,6 @@ export class QueryService {
         (_, groupByPart, rest) => `${groupByPart} HAVING ${aggCond}${rest}`,
       );
     } else {
-      // Query had aggregate in WHERE but no GROUP BY: add GROUP BY on first FROM alias
       const fromMatch = cleaned.match(/\bFROM\s+\w+\s+(\w+)/i);
       const alias = fromMatch ? fromMatch[1] : "id";
       cleaned = cleaned.replace(
@@ -214,7 +210,6 @@ export class QueryService {
     return q;
   }
 
-  /** When SELECT has d.first_name/d.last_name (doctor) and GROUP BY has only patient columns, add d.id, d.first_name, d.last_name to GROUP BY. */
   private fixGroupByWhenSelectHasDoctorAndPatient(sqlQuery: string): string {
     if (!/\bGROUP\s+BY\b/i.test(sqlQuery)) return sqlQuery;
     if (!/\bd\.(first_name|last_name)\b/i.test(sqlQuery)) return sqlQuery;
@@ -229,7 +224,6 @@ export class QueryService {
     );
   }
 
-  /** Add explicit aliases to EXTRACT(MONTH/YEAR FROM visit_date) in SELECT when missing, so columns are not both named "extract". */
   private addExtractVisitDateAliases(sqlQuery: string): string {
     if (!/EXTRACT\s*\([^)]*visit_date/i.test(sqlQuery)) return sqlQuery;
     let q = sqlQuery.replace(
@@ -243,7 +237,6 @@ export class QueryService {
     return q;
   }
 
-  /** Fix JOIN order when d is used before JOIN doctors d (e.g. FROM visits v JOIN facilities f ON v.doctor_id = d.id). */
   private fixFacilityDoctorVisitJoinOrder(sqlQuery: string): string {
     return sqlQuery.replace(
       /\bFROM\s+visits\s+v\s+JOIN\s+facilities\s+f\s+ON\s+v\.doctor_id\s*=\s*d\.id\s+JOIN\s+doctors\s+d\s+ON\s+d\.facility_id\s*=\s*f\.id\b/gis,
@@ -251,7 +244,6 @@ export class QueryService {
     );
   }
 
-  /** When query has EXTRACT(... visit_date) and aggregate but no GROUP BY, add GROUP BY and fix COUNT(DISTINCT EXTRACT(...)). */
   private fixMissingGroupByForExtractVisitDate(sqlQuery: string): string {
     if (/\bGROUP\s+BY\b/i.test(sqlQuery)) return sqlQuery;
     if (!/EXTRACT\s*\([^)]*visit_date/i.test(sqlQuery)) return sqlQuery;
@@ -287,7 +279,6 @@ export class QueryService {
     )
       return sqlQuery;
     if (!/\b(?:v|visits)\s*\.\s*visit_date\b/i.test(sqlQuery)) return sqlQuery;
-    // Remove v.visit_date / visits.visit_date from SELECT only. Never touch "FROM v.visit_date" inside EXTRACT(...).
     const col = "(?:v|visits)\\s*\\.\\s*visit_date(?:\\s+AS\\s+\\w+)?";
     const patterns: [RegExp, string][] = [
       [new RegExp(",\\s*" + col + "\\s+FROM", "gis"), " FROM"],
@@ -317,7 +308,6 @@ export class QueryService {
     return sqlQuery;
   }
 
-  /** Remove invalid "EXTRACT(...) AS month = ..." or "AS year = ..." in WHERE (AS only allowed in SELECT). */
   private fixWhereExtractAsEquals(sqlQuery: string): string {
     return sqlQuery
       .replace(
@@ -330,12 +320,10 @@ export class QueryService {
       );
   }
 
-  /** Remove semicolon before GROUP BY so the query is one statement. */
   private fixSemicolonBeforeGroupBy(sqlQuery: string): string {
     return sqlQuery.replace(/\s*;\s*GROUP\s+BY\b/gi, " GROUP BY");
   }
 
-  /** PostgreSQL GROUP BY cannot use column aliases (AS month, AS year). Remove " AS alias" only inside GROUP BY clause. */
   private fixGroupByRemoveAlias(sqlQuery: string): string {
     return sqlQuery.replace(
       /\bGROUP\s+BY\s+([\s\S]+?)(?=\s+ORDER\s+BY|\s+HAVING|\s*;?\s*$)/gi,
@@ -346,7 +334,6 @@ export class QueryService {
     );
   }
 
-  /** Visits have no facility_id. Fix "FROM visits v JOIN facilities f ON v.doctor_id = d.id AND v.facility_id = f.id" → join via doctors. */
   private fixVisitsJoinFacilityWithoutDoctors(sqlQuery: string): string {
     return sqlQuery.replace(
       /\bFROM\s+visits\s+v\s+JOIN\s+facilities\s+f\s+ON\s+v\.doctor_id\s*=\s*d\.id\s+(?:AND\s+)?v\.facility_id\s*=\s*f\.id/gi,
@@ -354,11 +341,37 @@ export class QueryService {
     );
   }
 
-  /**
-   * Fix "per facility: count doctors, count patients, count visits" when the LLM
-   * wrongly JOINs doctors, patients and visits (Cartesian product) or uses f.id = v.doctor_id.
-   * Rewrites to scalar subqueries so each count is correct.
-   */
+  private fixGroupByFacilityPatientToTopPatientPerFacility(sqlQuery: string): string {
+    const hasWrongPattern =
+      /\bGROUP\s+BY\s+[\s\S]*?f\.(name|id)\b[\s\S]*?p\.(first_name|last_name|id)\b/i.test(
+        sqlQuery,
+      ) &&
+      (/\bORDER\s+BY\s+.*?num_visits\s+DESC/is.test(sqlQuery) ||
+        /\bORDER\s+BY\s+.*?COUNT\s*\(\s*v\.id\s*\)\s+DESC/is.test(sqlQuery)) &&
+      /\bCOUNT\s*\(\s*v\.id\s*\)/i.test(sqlQuery) &&
+      /\bFROM\s+visits\s+v\b/i.test(sqlQuery) &&
+      /\bJOIN\s+facilities\s+f\b/i.test(sqlQuery) &&
+      /\bJOIN\s+patients\s+p\b/i.test(sqlQuery) &&
+      !/^\s*WITH\s+/i.test(sqlQuery.trim());
+    if (!hasWrongPattern) return sqlQuery;
+    return `WITH counts AS (
+  SELECT f.id AS facility_id, f.name AS facility_name, p.id AS patient_id, p.first_name, p.last_name, COUNT(v.id) AS num_visits
+  FROM visits v
+  JOIN doctors d ON v.doctor_id = d.id
+  JOIN facilities f ON d.facility_id = f.id
+  JOIN patients p ON v.patient_id = p.id
+  GROUP BY f.id, f.name, p.id, p.first_name, p.last_name
+),
+ranked AS (
+  SELECT *, ROW_NUMBER() OVER (PARTITION BY facility_id ORDER BY num_visits DESC) AS rn
+  FROM counts
+)
+SELECT facility_name AS name, first_name || ' ' || last_name AS patient_name, num_visits
+FROM ranked
+WHERE rn = 1
+ORDER BY num_visits DESC`;
+  }
+
   private fixFacilityMultipleCountsCartesianProduct(sqlQuery: string): string {
     const wrongJoin =
       /\b(?:f\.id\s*=\s*v\.doctor_id|v\.doctor_id\s*=\s*f\.id)\b/i.test(
@@ -384,6 +397,30 @@ export class QueryService {
     return `SELECT f.name, (SELECT COUNT(*) FROM doctors d WHERE d.facility_id = f.id) AS ${numDoctors}, (SELECT COUNT(*) FROM patients p WHERE p.facility_id = f.id) AS ${numPatients}, (SELECT COUNT(*) FROM visits v JOIN doctors d ON v.doctor_id = d.id WHERE d.facility_id = f.id) AS ${numVisits} FROM facilities f ORDER BY ${numVisits} DESC${limitClause}`;
   }
 
+  /** Pipeline de normalisation / corrections SQL (ordre important). */
+  private applySqlFixes(sql: string): string {
+    const fixes: Array<(s: string) => string> = [
+      (s) => this.truncateAtStatementEnd(s),
+      (s) => s.replace(/`/g, ""),
+      (s) => this.fixMissingWithCteAs(s),
+      (s) => this.fixTrailingCommaBeforeParen(s),
+      (s) => this.moveAggregateFromWhereToHaving(s),
+      (s) => this.fixMissingGroupByForExtractVisitDate(s),
+      (s) => this.removeVisitDateFromSelectWhenGroupByExtract(s),
+      (s) => this.fixFacilityDoctorVisitJoinOrder(s),
+      (s) => this.fixGroupByWhenSelectHasDoctorAndPatient(s),
+      (s) => this.fixGroupByReasonOrDiagnosisOnly(s),
+      (s) => this.addExtractVisitDateAliases(s),
+      (s) => this.fixWhereExtractAsEquals(s),
+      (s) => this.fixSemicolonBeforeGroupBy(s),
+      (s) => this.fixGroupByRemoveAlias(s),
+      (s) => this.fixVisitsJoinFacilityWithoutDoctors(s),
+      (s) => this.fixGroupByFacilityPatientToTopPatientPerFacility(s),
+      (s) => this.fixFacilityMultipleCountsCartesianProduct(s),
+    ];
+    return fixes.reduce((acc, fix) => fix(acc), sql);
+  }
+
   private assertReadOnly(sqlQuery: string): void {
     const trimmed = sqlQuery.trim().toUpperCase();
     if (!trimmed.startsWith("SELECT") && !trimmed.startsWith("WITH")) {
@@ -400,6 +437,7 @@ export class QueryService {
 
   async naturalLanguageToSql(
     naturalLanguage: string,
+    previousExecutionError?: string,
   ): Promise<{ sql: string }> {
     const trimmed = naturalLanguage?.trim();
     if (!trimmed) {
@@ -417,16 +455,17 @@ export class QueryService {
         "OPENAI_API_KEY or OPENAI_BASE_URL is not set. Set them in .env.",
       );
     }
+    let userContent = `Translate this natural language question into a single PostgreSQL SELECT query.\n\nQuestion: ${trimmed}`;
+    if (previousExecutionError) {
+      userContent += `\n\nThis error occurred when executing the previous generated query. Generate a corrected SQL query.\nError: ${previousExecutionError}`;
+    }
     try {
       const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
       const response = await this.openai.chat.completions.create({
         model,
         messages: [
           { role: "system", content: SCHEMA_CONTEXT },
-          {
-            role: "user",
-            content: `Translate this natural language question into a single PostgreSQL SELECT query.\n\nQuestion: ${trimmed}`,
-          },
+          { role: "user", content: userContent },
         ],
         temperature: 0.1,
       });
@@ -452,27 +491,15 @@ export class QueryService {
           .replace(/\n?```.*$/s, "")
           .trim();
       }
-      sqlQuery = this.truncateAtStatementEnd(sqlQuery);
-      sqlQuery = sqlQuery.replace(/`/g, "");
-      sqlQuery = this.fixMissingWithCteAs(sqlQuery);
-      sqlQuery = this.fixTrailingCommaBeforeParen(sqlQuery);
-      sqlQuery = this.moveAggregateFromWhereToHaving(sqlQuery);
-      sqlQuery = this.fixMissingGroupByForExtractVisitDate(sqlQuery);
-      sqlQuery = this.removeVisitDateFromSelectWhenGroupByExtract(sqlQuery);
-      sqlQuery = this.fixFacilityDoctorVisitJoinOrder(sqlQuery);
-      sqlQuery = this.fixGroupByWhenSelectHasDoctorAndPatient(sqlQuery);
-      sqlQuery = this.fixGroupByReasonOrDiagnosisOnly(sqlQuery);
-      sqlQuery = this.addExtractVisitDateAliases(sqlQuery);
-      sqlQuery = this.fixWhereExtractAsEquals(sqlQuery);
-      sqlQuery = this.fixSemicolonBeforeGroupBy(sqlQuery);
-      sqlQuery = this.fixGroupByRemoveAlias(sqlQuery);
-      sqlQuery = this.fixVisitsJoinFacilityWithoutDoctors(sqlQuery);
-      sqlQuery = this.fixFacilityMultipleCountsCartesianProduct(sqlQuery);
+      sqlQuery = this.applySqlFixes(sqlQuery);
       this.assertReadOnly(sqlQuery);
       return { sql: sqlQuery };
     } catch (err: unknown) {
       const msg =
-        err && typeof err === "object" && "status" in err && err.status === 429
+        err &&
+        typeof err === "object" &&
+        "status" in err &&
+        (err as { status: number }).status === 429
           ? "OpenAI quota exceeded (check billing at platform.openai.com)."
           : err instanceof Error
             ? err.message
@@ -510,6 +537,37 @@ export class QueryService {
     }
   }
 
+  /** True if the error looks like invalid SQL (GROUP BY, syntax, missing table, etc.). */
+  private isSqlExecutionError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return /GROUP BY|must appear in the|aggregate function|syntax error|at or near|column.*does not exist|missing FROM-clause entry|undefined table|relation .* does not exist/i.test(
+      msg,
+    );
+  }
+
+   // Extracts column/table identifiers from PostgreSQL error messages
+   // (e.g. "column \"v.diagnosis\" must appear..." -> ["v.diagnosis"]).
+  private extractColumnKeywordsFromSqlError(errorMessage: string): string[] {
+    const keywords: string[] = [];
+    const quoted = errorMessage.matchAll(/"([^"]+)"/g);
+    for (const m of quoted) {
+      const name = m[1].trim();
+      if (
+        name &&
+        !/^(SELECT|FROM|WHERE|GROUP|ORDER|HAVING|LIMIT|AS|AND|OR)$/i.test(name)
+      ) {
+        keywords.push(name);
+      }
+    }
+    const columnMatch = errorMessage.match(
+      /column\s+(\w+(?:\.\w+)?)\s+(?:must|does)/i,
+    );
+    if (columnMatch) keywords.push(columnMatch[1]);
+    const tableMatch = errorMessage.match(/table\s+["']?(\w+)["']?/i);
+    if (tableMatch) keywords.push(tableMatch[1]);
+    return [...new Set(keywords)];
+  }
+
   async queryFromNaturalLanguage(naturalLanguage: string): Promise<{
     sql: string;
     rows: unknown[];
@@ -526,8 +584,31 @@ export class QueryService {
         `Natural language query must be at most ${MAX_NL_QUERY_LENGTH} characters.`,
       );
     }
-    const { sql: generatedSql } = await this.naturalLanguageToSql(trimmed);
-    const { rows, columns } = await this.executeSql(generatedSql);
-    return { sql: generatedSql, rows, columns };
+    let lastError: unknown;
+    let previousErrorForLlm: string | undefined;
+    for (let attempt = 1; attempt <= MAX_LLM_RETRIES; attempt++) {
+      try {
+        const { sql: generatedSql } = await this.naturalLanguageToSql(
+          trimmed,
+          previousErrorForLlm,
+        );
+        const { rows, columns } = await this.executeSql(generatedSql);
+        return { sql: generatedSql, rows, columns };
+      } catch (err: unknown) {
+        lastError = err;
+        if (!this.isSqlExecutionError(err) || attempt === MAX_LLM_RETRIES) {
+          throw err;
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        const columnKeywords = this.extractColumnKeywordsFromSqlError(msg);
+        previousErrorForLlm = columnKeywords.length
+          ? `Error: ${msg}\n\nColumn names / keywords to fix (add to GROUP BY or use in an aggregate): ${columnKeywords.join(", ")}`
+          : msg;
+        this.logger.warn(
+          `Error LLM (execution): ${msg}. Retry ${attempt}/${MAX_LLM_RETRIES} (max ${MAX_LLM_RETRIES})`,
+        );
+      }
+    }
+    throw lastError;
   }
 }
